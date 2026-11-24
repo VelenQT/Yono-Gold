@@ -1,0 +1,544 @@
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local LocalPlayer = Players.LocalPlayer
+
+local TARGET_PLACE_ID = 16446142514
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "YONO GAY",
+    LoadingTitle = "Loading",
+    LoadingSubtitle = "YonoBermainDenganDapit.3gp",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "Yono_AutoPlayGoldBar_Config",
+        FileName = "YonoAutoPlayGoldBarSettings"
+    }
+})
+
+local MainTab = Window:CreateTab("Main", 4483362458)
+
+local StatusLabel = MainTab:CreateLabel("Status: Idle")
+local StepLabel = MainTab:CreateLabel("Step: -")
+
+local AutoRunning = false
+local RescanBusy = false
+local RunToken = 0
+
+local RecordedReveals = {}
+local SeenRevealKeys = {}
+
+local function setStatus(statusText, stepText)
+    StatusLabel:Set("Status: " .. statusText)
+    if stepText then
+        StepLabel:Set("Step: " .. stepText)
+    end
+end
+
+local function makePosKey(cf)
+    local p = cf.Position
+    return string.format("%.0f_%.0f_%.0f", p.X, p.Y, p.Z)
+end
+
+local function resetRecordedReveals()
+    table.clear(RecordedReveals)
+    table.clear(SeenRevealKeys)
+end
+
+local function addUniqueReveals(rawBeams)
+    local addedCount = 0
+    for _, entry in ipairs(rawBeams) do
+        local key = entry.key or makePosKey(entry.cframe)
+        if not SeenRevealKeys[key] then
+            SeenRevealKeys[key] = true
+            table.insert(RecordedReveals, {
+                instance = entry.instance,
+                cframe = entry.cframe,
+                key = key
+            })
+            addedCount += 1
+        end
+    end
+    return addedCount
+end
+
+local function isActive(token)
+    return AutoRunning and (token == RunToken)
+end
+
+local function getRootPart()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    return char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 10)
+end
+
+local function getPivotCFrame(obj)
+    if not obj or not obj.Parent then
+        return nil
+    end
+    if obj:IsA("BasePart") then
+        return obj.CFrame
+    elseif obj:IsA("Attachment") then
+        return obj.WorldCFrame
+    elseif obj:IsA("Model") then
+        local ok, cf = pcall(function()
+            return obj:GetPivot()
+        end)
+        if ok and typeof(cf) == "CFrame" then
+            return cf
+        end
+        if obj.PrimaryPart then
+            return obj.PrimaryPart.CFrame
+        end
+        local part = obj:FindFirstChildWhichIsA("BasePart", true)
+        if part then
+            return part.CFrame
+        end
+    else
+        local part = obj:FindFirstChildWhichIsA("BasePart", true)
+        if part then
+            return part.CFrame
+        end
+    end
+    return nil
+end
+
+local function teleportTo(cf)
+    if not cf then return end
+    local hrp = getRootPart()
+    if hrp then
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        hrp.CFrame = cf * CFrame.new(0, 3, 0)
+    end
+end
+
+local function firePrompt(prompt)
+    if not prompt or not prompt.Parent or not prompt:IsA("ProximityPrompt") then
+        return false
+    end
+    local okFire = false
+    if typeof(fireproximityprompt) == "function" then
+        okFire = pcall(function()
+            fireproximityprompt(prompt)
+        end)
+    end
+    if not okFire then
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(math.max(prompt.HoldDuration, 0.05))
+            prompt:InputHoldEnd()
+        end)
+    end
+    return true
+end
+
+local function findPromptIn(container, preferredName)
+    if not container then return nil end
+    if preferredName then
+        local direct = container:FindFirstChild(preferredName, true)
+        if direct and direct:IsA("ProximityPrompt") then
+            return direct
+        end
+    end
+    return container:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
+
+local function getScanObjects()
+    local scanner = workspace:FindFirstChild("[WGC Integration] Scanner")
+    if not scanner then return nil, nil end
+    local att = scanner:FindFirstChild("Attachment")
+    local scanPrompt = findPromptIn(att, "@SCAN_PROMPT") or findPromptIn(scanner, "@SCAN_PROMPT")
+    return scanner, scanPrompt
+end
+
+local function getPortalObjects()
+    local scanner = workspace:FindFirstChild("[WGC Integration] Scanner")
+    if not scanner then return nil, nil end
+    local portal = scanner:FindFirstChild("Portal")
+    if not portal then return scanner, nil end
+    local face = portal:FindFirstChild("@FACE")
+    local att = face and face:FindFirstChild("Attachment")
+    local portalPrompt = findPromptIn(att, "@PROMPT") or findPromptIn(portal, "@PROMPT")
+    return portal, portalPrompt
+end
+
+local function getSmelterObjects()
+    local interactable = workspace:FindFirstChild("Interactable")
+    local smelter = interactable and interactable:FindFirstChild("Smelter") or workspace:FindFirstChild("Smelter", true)
+    if not smelter then return nil, nil end
+    local att = smelter:FindFirstChild("Attachment")
+    local prompt = findPromptIn(att, "@PROMPT") or findPromptIn(smelter, "@PROMPT")
+    return smelter, prompt
+end
+
+local function deliverToSmelter()
+    setStatus("Delivering...", "Deliver")
+    local smelter, prompt = getSmelterObjects()
+    if not smelter and not prompt then
+        setStatus("Smelter not found", "Deliver")
+        return false
+    end
+    local targetCF = (prompt and (getPivotCFrame(prompt.Parent) or getPivotCFrame(prompt))) or getPivotCFrame(smelter)
+    if targetCF then
+        teleportTo(targetCF)
+        task.wait(0.2)
+    end
+    if prompt then
+        firePrompt(prompt)
+        setStatus("Delivered", "Deliver")
+        return true
+    else
+        setStatus("Smelt prompt not found", "Deliver")
+        return false
+    end
+end
+
+local function getWorkspaceByName(name)
+    local items = {}
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child.Name == name then
+            table.insert(items, child)
+        end
+    end
+    return items
+end
+
+local function collectCurrentReveals()
+    local beams = getWorkspaceByName("Location Beam")
+    local list = {}
+    for _, beam in ipairs(beams) do
+        local cf = getPivotCFrame(beam)
+        if cf then
+            table.insert(list, {
+                instance = beam,
+                cframe = cf,
+                key = makePosKey(cf)
+            })
+        end
+    end
+    return list
+end
+
+local function getDigPrompt(digSpot)
+    if not digSpot or not digSpot.Parent then return nil end
+    local part = digSpot:FindFirstChild("Part")
+    if part then
+        local p = part:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if p then return p end
+    end
+    return digSpot:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
+
+local function processDigSpots(token)
+    while isActive(token) do
+        local digSpots = getWorkspaceByName("Dig Spot")
+        if #digSpots == 0 then
+            break
+        end
+        local targetDig = digSpots[1]
+        local digCF = getPivotCFrame(targetDig)
+        if digCF then
+            setStatus("Digging...", "Dig")
+            teleportTo(digCF)
+            task.wait(0.2)
+            local digPrompt = getDigPrompt(targetDig)
+            if digPrompt then
+                firePrompt(digPrompt)
+            end
+            local lastReFire = os.clock()
+            while isActive(token) and targetDig and targetDig.Parent ~= nil do
+                setStatus("Digging...", "Dig")
+                local currentDigCF = getPivotCFrame(targetDig)
+                if currentDigCF then
+                    teleportTo(currentDigCF)
+                end
+                if (os.clock() - lastReFire) >= 1.2 then
+                    local p = getDigPrompt(targetDig)
+                    if p then
+                        firePrompt(p)
+                    end
+                    lastReFire = os.clock()
+                end
+                task.wait(0.15)
+            end
+            task.wait(0.2)
+        else
+            break
+        end
+    end
+end
+
+local function manualRescanIgnoreRecorded()
+    if RescanBusy then
+        setStatus("Rescanning...", "Rescan")
+        return
+    end
+    RescanBusy = true
+    local ok, err = pcall(function()
+        setStatus("Rescanning...", "Rescan")
+        local _, scanPrompt = getScanObjects()
+        if not scanPrompt then
+            setStatus("Scan prompt not found, delivering...", "Rescan")
+            deliverToSmelter()
+            return
+        end
+        local promptCF = getPivotCFrame(scanPrompt.Parent) or getPivotCFrame(scanPrompt)
+        if promptCF then
+            teleportTo(promptCF)
+            task.wait(0.2)
+        end
+        firePrompt(scanPrompt)
+        setStatus("Waiting...", "Rescan")
+        local waitStart = os.clock()
+        local totalAdded = 0
+        repeat
+            local current = collectCurrentReveals()
+            if #current > 0 then
+                totalAdded += addUniqueReveals(current)
+            end
+            task.wait(0.15)
+        until (os.clock() - waitStart) > 4.5
+        if totalAdded > 0 then
+            setStatus(string.format("Recorded +%d new", totalAdded), "Rescan")
+        else
+            setStatus("No new reveal", "Rescan")
+        end
+    end)
+    if not ok then
+        setStatus("Error: " .. tostring(err), "Error")
+    end
+    RescanBusy = false
+end
+
+local function teleportToTargetPlace()
+    setStatus("Teleporting to game...", "Teleport To Game")
+    local ok, err = pcall(function()
+        TeleportService:Teleport(TARGET_PLACE_ID, LocalPlayer)
+    end)
+    if not ok then
+        setStatus("TP Error: " .. tostring(err), "Teleport To Game")
+    end
+end
+
+local function runHierarchy(token)
+    resetRecordedReveals()
+
+    setStatus("Scanning...", "Scan")
+    local _, scanPrompt = getScanObjects()
+    if not scanPrompt then
+        setStatus("Scan not found, delivering...", "Deliver")
+        deliverToSmelter()
+        task.wait(0.5)
+        if isActive(token) then
+            setStatus("Waiting 18s...", "Wait")
+            local waitStart = os.clock()
+            while isActive(token) do
+                local remaining = 18 - (os.clock() - waitStart)
+                if remaining <= 0 then break end
+                setStatus(string.format("Waiting %ds...", math.floor(remaining)), "Wait")
+                task.wait(0.5)
+            end
+            if isActive(token) then
+                teleportToTargetPlace()
+                task.wait(5)
+            end
+        end
+        return
+    end
+
+    local promptCF = getPivotCFrame(scanPrompt.Parent) or getPivotCFrame(scanPrompt)
+    if promptCF then
+        teleportTo(promptCF)
+        task.wait(0.2)
+    end
+    firePrompt(scanPrompt)
+
+    setStatus("Waiting...", "Reveal")
+    local revealWaitStart = os.clock()
+    repeat
+        if not isActive(token) then return end
+        local current = collectCurrentReveals()
+        if #current > 0 then
+            setStatus("Recording...", "Record")
+            addUniqueReveals(current)
+            break
+        end
+        task.wait(0.15)
+    until (os.clock() - revealWaitStart) > 8
+
+    if #RecordedReveals > 0 then
+        setStatus("Waiting...", "Hide Reveal")
+        local vanishStart = os.clock()
+        repeat
+            if not isActive(token) then return end
+            local latest = collectCurrentReveals()
+            if #latest > 0 then
+                addUniqueReveals(latest)
+            end
+            local masihAda = 0
+            for _, item in ipairs(RecordedReveals) do
+                if item.instance and item.instance.Parent == workspace then
+                    masihAda += 1
+                end
+            end
+            if masihAda == 0 then
+                break
+            end
+            task.wait(0.15)
+        until (os.clock() - vanishStart) > 12
+
+        for idx, item in ipairs(RecordedReveals) do
+            if not isActive(token) then return end
+            setStatus(string.format("Teleporting (%d/%d)...", idx, #RecordedReveals), "TP Reveal")
+            teleportTo(item.cframe)
+            task.wait(0.35)
+        end
+    end
+
+    setStatus("Waiting...", "Wait Dig")
+    local digWaitStart = os.clock()
+    repeat
+        if not isActive(token) then return end
+        if #getWorkspaceByName("Dig Spot") > 0 then
+            break
+        end
+        task.wait(0.2)
+    until (os.clock() - digWaitStart) > 6
+
+    while isActive(token) do
+        if #getWorkspaceByName("Dig Spot") > 0 then
+            processDigSpots(token)
+            if not isActive(token) then return end
+        end
+
+        local countdown = 5
+        local foundDigDuringCountdown = false
+
+        while isActive(token) and countdown > 0 do
+            if #getWorkspaceByName("Dig Spot") > 0 then
+                foundDigDuringCountdown = true
+                setStatus("Digging...", "Dig")
+                task.wait(0.2)
+                break
+            end
+            setStatus(string.format("Portal in %ds...", countdown), "Countdown")
+            local stepStart = os.clock()
+            while isActive(token) and (os.clock() - stepStart) < 1 do
+                if #getWorkspaceByName("Dig Spot") > 0 then
+                    foundDigDuringCountdown = true
+                    break
+                end
+                task.wait(0.1)
+            end
+            if foundDigDuringCountdown then
+                setStatus("Digging...", "Dig")
+                task.wait(0.15)
+                break
+            end
+            countdown -= 1
+        end
+
+        if not isActive(token) then return end
+        if not foundDigDuringCountdown and #getWorkspaceByName("Dig Spot") == 0 then
+            break
+        end
+    end
+
+    setStatus("Going to portal...", "Portal")
+    local portalObj, portalPrompt = getPortalObjects()
+    local portalCF = getPivotCFrame(portalObj) or (portalPrompt and (getPivotCFrame(portalPrompt.Parent) or getPivotCFrame(portalPrompt)))
+    if portalCF then
+        teleportTo(portalCF)
+        task.wait(0.25)
+    end
+    if portalPrompt then
+        firePrompt(portalPrompt)
+    end
+    task.wait(0.5)
+
+    if isActive(token) then
+        deliverToSmelter()
+        setStatus("Waiting 18s...", "Wait")
+        local waitStart = os.clock()
+        while isActive(token) do
+            local remaining = 18 - (os.clock() - waitStart)
+            if remaining <= 0 then break end
+            setStatus(string.format("Waiting %ds...", math.floor(remaining)), "Wait")
+            task.wait(0.5)
+        end
+        if isActive(token) then
+            teleportToTargetPlace()
+            task.wait(5)
+        end
+    end
+end
+
+MainTab:CreateToggle({
+    Name = "Auto Play",
+    CurrentValue = true,
+    Flag = "AutoPlayToggle",
+    Callback = function(Value)
+        AutoRunning = Value
+        if Value then
+            RunToken += 1
+            local activeToken = RunToken
+            task.spawn(function()
+                while isActive(activeToken) do
+                    local ok, err = pcall(function()
+                        runHierarchy(activeToken)
+                    end)
+                    if not ok then
+                        setStatus("Error: " .. tostring(err), "Error")
+                        task.wait(1)
+                    end
+                end
+                if activeToken == RunToken then
+                    setStatus("Idle", "-")
+                end
+            end)
+        else
+            RunToken += 1
+            setStatus("Idle", "-")
+        end
+    end,
+})
+
+MainTab:CreateButton({
+    Name = "Rescan",
+    Callback = manualRescanIgnoreRecorded,
+})
+
+MainTab:CreateButton({
+    Name = "Deliver",
+    Callback = deliverToSmelter,
+})
+
+MainTab:CreateButton({
+    Name = "Teleport To Game",
+    Callback = teleportToTargetPlace,
+})
+
+-- ===== AUTO ON =====
+task.spawn(function()
+    task.wait(0.5)
+    AutoRunning = true
+    RunToken += 1
+    local activeToken = RunToken
+    setStatus("Auto started", "Init")
+    task.spawn(function()
+        while isActive(activeToken) do
+            local ok, err = pcall(function()
+                runHierarchy(activeToken)
+            end)
+            if not ok then
+                setStatus("Error: " .. tostring(err), "Error")
+                task.wait(1)
+            end
+        end
+    end)
+end)
+
+Rayfield:LoadConfiguration()
+
+print("[YONO GAY] loaded · auto start")
